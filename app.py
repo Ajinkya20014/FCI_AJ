@@ -89,10 +89,20 @@ def load_from_bytes(xls_bytes: bytes):
     dispatch_lg  = read_one("LG_to_FPS")
     stock_levels = read_one("Stock_Levels")
 
+    # explicit mapping (avoid locals[] pitfalls)
+    dfs = {
+        "Settings": settings,
+        "LGs": lgs,
+        "FPS": fps,
+        "Vehicles": vehicles,
+        "CG_to_LG": dispatch_cg,
+        "LG_to_FPS": dispatch_lg,
+        "Stock_Levels": stock_levels,
+    }
+
     # validate minimal columns
     for tag, need in REQUIRED_COLS.items():
-        df = locals()[tag if tag not in ("CG_to_LG","LG_to_FPS") else ("dispatch_cg" if tag=="CG_to_LG" else "dispatch_lg")]
-        _need_cols(df, need, tag)
+        _need_cols(dfs[tag], need, tag)
 
     # types
     for c in ("Day","Vehicle_ID","LG_ID","Quantity_tons"):
@@ -130,7 +140,6 @@ def load_from_bytes(xls_bytes: bytes):
 
     veh_usage = (dispatch_lg.groupby("Day")["Vehicle_ID"].nunique()
                  .reset_index(name="Trips_Used") if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Trips_Used"]))
-    # your old code used MAX_TRIPS as “max trucks/day”; here compute total possible trips/day
     veh_usage["Max_Trips"] = VEH_TOTAL * MAX_TRIPS
 
     # LG stock pivot
@@ -152,6 +161,7 @@ def load_from_bytes(xls_bytes: bytes):
         "veh_usage": veh_usage,
         "params": dict(DAYS=DAYS, TRUCK_CAP=TRUCK_CAP, VEH_TOTAL=VEH_TOTAL, MAX_TRIPS=MAX_TRIPS)
     }
+
 
 # ————————————————————————————————
 # Sidebar: upload & publish to session history
@@ -411,3 +421,4 @@ with tab7:
     cols = st.columns(3)
     for i, (label, val) in enumerate(metrics):
         cols[i%3].metric(label, val)
+
