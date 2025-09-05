@@ -138,8 +138,11 @@ def load_from_bytes(xls_bytes: bytes):
     day_totals_lg = (dispatch_lg.groupby("Day", as_index=False)["Quantity_tons"].sum()
                      if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Quantity_tons"]))
 
-    veh_usage = (dispatch_lg.groupby("Day")["Vehicle_ID"].nunique()
-                 .reset_index(name="Trips_Used") if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Trips_Used"]))
+    # ⬇️ CHANGE 1: trips/day = number of rows (each row is one trip)
+    veh_usage = (dispatch_lg.groupby("Day")
+                 .size()
+                 .reset_index(name="Trips_Used")
+                 if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Trips_Used"]))
     veh_usage["Max_Trips"] = VEH_TOTAL * MAX_TRIPS
 
     # LG stock pivot
@@ -231,8 +234,6 @@ MAX_TRIPS    = D["params"]["MAX_TRIPS"]  # per-vehicle/day
 VEH_TOTAL    = D["params"]["VEH_TOTAL"]
 
 # For legacy logic in your code: DAILY_CAP = MAX_TRIPS * TRUCK_CAP
-# (You previously treated MAX_TRIPS as total daily trips; now it’s per-vehicle,
-# but we keep your KPI math exactly the same for continuity)
 DAILY_CAP = MAX_TRIPS * TRUCK_CAP
 
 # ————————————————————————————————
@@ -245,7 +246,6 @@ with st.sidebar:
     min_day = int(pd.concat([day_totals_cg["Day"], day_totals_lg["Day"]], ignore_index=True).min()) if not day_totals_cg.empty or not day_totals_lg.empty else 1
     max_day = int(pd.concat([day_totals_cg["Day"], day_totals_lg["Day"]], ignore_index=True).max()) if not day_totals_cg.empty or not day_totals_lg.empty else DAYS
 
-    # Your original code used MIN_DAY (negative if needed). Keep simple: real days only.
     day_range = st.slider("Dispatch Window (days)",
                           min_value=min_day, max_value=max_day,
                           value=(min_day, max_day), format="%d")
@@ -253,7 +253,6 @@ with st.sidebar:
     st.subheader("Select LGs")
     cols = st.columns(4)
     selected_lgs = []
-    # Allow selection from lg_stock columns (Entity_IDs)
     for i, lg in enumerate(lg_stock.columns):
         if cols[i % 4].checkbox(str(lg), value=True, key=f"lg_{lg}"):
             selected_lgs.append(lg)
@@ -300,12 +299,22 @@ with tab2:
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+
+    # ⬇️ CHANGE 2: Clean Vehicle_IDs for display (no 'nan')
+    if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
+        vclean = pd.to_numeric(fps_df["Vehicle_ID"], errors="coerce").dropna().astype(int)
+        fps_df = fps_df.copy()
+        fps_df.loc[vclean.index, "Vehicle_ID"] = vclean
+
     report = (
         fps_df.groupby("FPS_ID")
         .agg(
             Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
             Trips_Count=pd.NamedAgg("Vehicle_ID","count"),
-            Vehicle_IDs=pd.NamedAgg("Vehicle_ID", lambda vs: ",".join(map(str,sorted(set(vs)))))
+            Vehicle_IDs=pd.NamedAgg(
+                "Vehicle_ID",
+                lambda s: ",".join(map(str, sorted(pd.to_numeric(s, errors="coerce").dropna().astype(int).unique())))
+            )
         )
         .reset_index()
         .merge(fps[["FPS_ID","FPS_Name"]] if "FPS_Name" in fps.columns else fps[["FPS_ID"]],
@@ -381,8 +390,13 @@ with tab7:
     lg_sel   = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_lg.empty else 0.0
     avg_daily_cg = cg_sel/sel_days if sel_days>0 else 0
     avg_daily_lg = lg_sel/sel_days if sel_days>0 else 0
-    avg_trips    = veh_usage.query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"].mean() if not veh_usage.empty else 0.0
-    pct_fleet    = (avg_trips / MAX_TRIPS)*100 if MAX_TRIPS else 0  # keep your original formula
+
+    # ⬇️ CHANGE 3: avg trips/day now reflects trip rows; also explicitly handle empty/NaN
+    avg_trips = 0.0
+    if not D["veh_usage"].empty:
+        window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
+        avg_trips = float(window.mean()) if not window.empty else 0.0
+    pct_fleet = (avg_trips / MAX_TRIPS)*100 if MAX_TRIPS else 0  # keep your original formula
 
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
