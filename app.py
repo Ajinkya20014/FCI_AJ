@@ -311,20 +311,32 @@ with tab3:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
 
-    # Clean Vehicle_IDs for display (no 'nan')
+    # 🔧 Robust Vehicle_ID normalization: extract digits and use as integer IDs
     if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
-        vclean = pd.to_numeric(fps_df["Vehicle_ID"], errors="coerce").dropna().astype(int)
+        # keep original column; add a normalized one for aggregation
         fps_df = fps_df.copy()
-        fps_df.loc[vclean.index, "Vehicle_ID"] = vclean
+        # Extract first run of digits from whatever is in Vehicle_ID (e.g., "veh-3" -> 3, "4.0" -> 4)
+        fps_df["Vehicle_ID_norm"] = (
+            fps_df["Vehicle_ID"]
+            .astype(str)
+            .str.extract(r"(\d+)", expand=False)
+            .astype("Int64")
+        )
 
     report = (
         fps_df.groupby("FPS_ID")
         .agg(
             Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-            Trips_Count=pd.NamedAgg("Vehicle_ID","count"),
+            # count trips using normalized (non-null) IDs; if none, fall back to row count via size()
+            Trips_Count=pd.NamedAgg("Vehicle_ID_norm","count")
+            if "Vehicle_ID_norm" in fps_df.columns else pd.NamedAgg("Vehicle_ID","count"),
             Vehicle_IDs=pd.NamedAgg(
-                "Vehicle_ID",
-                lambda s: ",".join(map(str, sorted(pd.to_numeric(s, errors="coerce").dropna().astype(int).unique())))
+                "Vehicle_ID_norm" if "Vehicle_ID_norm" in fps_df.columns else "Vehicle_ID",
+                lambda s: ",".join(map(str,
+                                       sorted(pd.to_numeric(s, errors="coerce")
+                                              .dropna()
+                                              .astype(int)
+                                              .unique())))
             )
         )
         .reset_index()
@@ -332,6 +344,7 @@ with tab3:
                on="FPS_ID", how="left")
         .sort_values("Total_Dispatched_tons", ascending=False)
     ) if not fps_df.empty else pd.DataFrame(columns=["FPS_ID","Total_Dispatched_tons","Trips_Count","Vehicle_IDs","FPS_Name"])
+
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————
