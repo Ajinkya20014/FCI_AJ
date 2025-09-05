@@ -313,39 +313,37 @@ with tab3:
 
     # 🔧 Robust Vehicle_ID normalization: extract digits and use as integer IDs
     if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
+        # keep original column; add a normalized one for aggregation
         fps_df = fps_df.copy()
+        # Extract first run of digits from whatever is in Vehicle_ID (e.g., "veh-3" -> 3, "4.0" -> 4)
         fps_df["Vehicle_ID_norm"] = (
-            fps_df["Vehicle_ID"].astype(str).str.extract(r"(\d+)", expand=False).astype("Int64")
+            fps_df["Vehicle_ID"]
+            .astype(str)
+            .str.extract(r"(\d+)", expand=False)
+            .astype("Int64")
         )
 
-    # ——— CHANGED HERE: Trips_Count = number of rows (each row is a trip) ———
-    # Build pieces then merge to keep logic explicit
-    trips = fps_df.groupby("FPS_ID").size().rename("Trips_Count").reset_index()
-    totals = fps_df.groupby("FPS_ID", as_index=False)["Quantity_tons"].sum().rename(columns={"Quantity_tons":"Total_Dispatched_tons"})
-
-    if "Vehicle_ID_norm" in fps_df.columns:
-        vehlists = (
-            fps_df.dropna(subset=["Vehicle_ID_norm"])
-                  .groupby("FPS_ID")["Vehicle_ID_norm"]
-                  .apply(lambda s: ",".join(map(str, sorted(s.dropna().astype(int).unique()))))
-                  .rename("Vehicle_IDs")
-                  .reset_index()
+    report = (
+        fps_df.groupby("FPS_ID")
+        .agg(
+            Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
+            # count trips using normalized (non-null) IDs; if none, fall back to row count via size()
+            Trips_Count=pd.NamedAgg("Vehicle_ID_norm","count")
+            if "Vehicle_ID_norm" in fps_df.columns else pd.NamedAgg("Vehicle_ID","count"),
+            Vehicle_IDs=pd.NamedAgg(
+                "Vehicle_ID_norm" if "Vehicle_ID_norm" in fps_df.columns else "Vehicle_ID",
+                lambda s: ",".join(map(str,
+                                       sorted(pd.to_numeric(s, errors="coerce")
+                                              .dropna()
+                                              .astype(int)
+                                              .unique())))
+            )
         )
-    else:
-        vehlists = (
-            fps_df.groupby("FPS_ID")["Vehicle_ID"]
-                  .apply(lambda s: ",".join(map(str, sorted(pd.to_numeric(s, errors="coerce").dropna().astype(int).unique()))))
-                  .rename("Vehicle_IDs")
-                  .reset_index()
-        )
-
-    report = (totals
-              .merge(trips, on="FPS_ID", how="left")
-              .merge(vehlists, on="FPS_ID", how="left")
-              .merge(fps[["FPS_ID","FPS_Name"]] if "FPS_Name" in fps.columns else fps[["FPS_ID"]],
-                     on="FPS_ID", how="left")
-              .fillna({"Trips_Count": 0, "Vehicle_IDs": ""})
-              .sort_values("Total_Dispatched_tons", ascending=False))
+        .reset_index()
+        .merge(fps[["FPS_ID","FPS_Name"]] if "FPS_Name" in fps.columns else fps[["FPS_ID"]],
+               on="FPS_ID", how="left")
+        .sort_values("Total_Dispatched_tons", ascending=False)
+    ) if not fps_df.empty else pd.DataFrame(columns=["FPS_ID","Total_Dispatched_tons","Trips_Count","Vehicle_IDs","FPS_Name"])
 
     st.dataframe(report, use_container_width=True)
 
