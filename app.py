@@ -138,12 +138,12 @@ def load_from_bytes(xls_bytes: bytes):
     day_totals_lg = (dispatch_lg.groupby("Day", as_index=False)["Quantity_tons"].sum()
                      if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Quantity_tons"]))
 
-    # ⬇️ CHANGE 1: trips/day = number of rows (each row is one trip)
-    veh_usage = (dispatch_lg.groupby("Day")
-                 .size()
-                 .reset_index(name="Trips_Used")
-                 if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Trips_Used"]))
-    veh_usage["Max_Trips"] = VEH_TOTAL * MAX_TRIPS
+    # ✅ trips/day = number of rows (each row is one trip)
+    veh_usage = (
+        dispatch_lg.groupby("Day").size().reset_index(name="Trips_Used")
+        if not dispatch_lg.empty else pd.DataFrame(columns=["Day","Trips_Used"])
+    )
+    veh_usage["Max_Trips"] = VEH_TOTAL * MAX_TRIPS  # vehicles * trips/vehicle/day
 
     # LG stock pivot
     lg_stock = (stock_levels[stock_levels["Entity_Type"]=="LG"]
@@ -233,8 +233,8 @@ TRUCK_CAP    = D["params"]["TRUCK_CAP"]
 MAX_TRIPS    = D["params"]["MAX_TRIPS"]  # per-vehicle/day
 VEH_TOTAL    = D["params"]["VEH_TOTAL"]
 
-# For legacy logic in your code: DAILY_CAP = MAX_TRIPS * TRUCK_CAP
-DAILY_CAP = MAX_TRIPS * TRUCK_CAP
+# ✅ TOTAL daily capacity (trips * vehicles * tons)
+DAILY_CAP = VEH_TOTAL * MAX_TRIPS * TRUCK_CAP
 
 # ————————————————————————————————
 # 5. Layout & Filters
@@ -263,7 +263,9 @@ with st.sidebar:
     lg_sel = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_lg.empty else 0.0
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
-    st.metric("Max Trucks/Day", MAX_TRIPS)
+    # ✅ show capacity figures that match the utilization math
+    st.metric("Max Trips/Day", VEH_TOTAL * MAX_TRIPS)
+    st.metric("Vehicles Available", VEH_TOTAL)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
 
 # Create tabs (your originals)
@@ -300,7 +302,7 @@ with tab3:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
 
-    # ⬇️ CHANGE 2: Clean Vehicle_IDs for display (no 'nan')
+    # Clean Vehicle_IDs for display (no 'nan')
     if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
         vclean = pd.to_numeric(fps_df["Vehicle_ID"], errors="coerce").dropna().astype(int)
         fps_df = fps_df.copy()
@@ -391,12 +393,15 @@ with tab7:
     avg_daily_cg = cg_sel/sel_days if sel_days>0 else 0
     avg_daily_lg = lg_sel/sel_days if sel_days>0 else 0
 
-    # ⬇️ CHANGE 3: avg trips/day now reflects trip rows; also explicitly handle empty/NaN
+    # ✅ average trips/day over window (already trips, not unique vehicles)
     avg_trips = 0.0
     if not D["veh_usage"].empty:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
-    pct_fleet = (avg_trips / MAX_TRIPS)*100 if MAX_TRIPS else 0  # keep your original formula
+
+    # ✅ utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
+    max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
+    pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
 
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
