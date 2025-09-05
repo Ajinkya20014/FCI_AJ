@@ -251,11 +251,20 @@ with st.sidebar:
                           value=(min_day, max_day), format="%d")
 
     st.subheader("Select LGs")
+
+    # 🔁 Map LG_ID → LG_Name for checkbox labels (keep returning LG_IDs)
+    try:
+        lg_id_to_name = {int(i): str(n) for i, n in zip(pd.to_numeric(lgs["LG_ID"], errors="coerce"), lgs["LG_Name"]) if pd.notna(i)}
+    except Exception:
+        lg_id_to_name = {}
+
     cols = st.columns(4)
     selected_lgs = []
-    for i, lg in enumerate(lg_stock.columns):
-        if cols[i % 4].checkbox(str(lg), value=True, key=f"lg_{lg}"):
-            selected_lgs.append(lg)
+    for i, lg_id in enumerate(lg_stock.columns):
+        # label is name; selection value remains the ID
+        label = lg_id_to_name.get(int(lg_id) if pd.notna(lg_id) else lg_id, str(lg_id))
+        if cols[i % 4].checkbox(label, value=True, key=f"lg_{lg_id}"):
+            selected_lgs.append(lg_id)
 
     st.markdown("---")
     st.header("Quick KPIs")
@@ -263,7 +272,7 @@ with st.sidebar:
     lg_sel = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_lg.empty else 0.0
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
-    # ✅ show capacity figures that match the utilization math
+    # show capacity figures that match the utilization math
     st.metric("Max Trips/Day", VEH_TOTAL * MAX_TRIPS)
     st.metric("Vehicles Available", VEH_TOTAL)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
@@ -393,13 +402,13 @@ with tab7:
     avg_daily_cg = cg_sel/sel_days if sel_days>0 else 0
     avg_daily_lg = lg_sel/sel_days if sel_days>0 else 0
 
-    # ✅ average trips/day over window (already trips, not unique vehicles)
+    # average trips/day over window (already trips, not unique vehicles)
     avg_trips = 0.0
     if not D["veh_usage"].empty:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
-    # ✅ utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
+    # utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
     max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
     pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
 
