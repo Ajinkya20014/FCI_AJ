@@ -205,7 +205,7 @@ with st.sidebar:
 active_bytes = None
 if upl is not None and not pub:
     active_bytes = upl.read()
-elif sel != "(none)"):
+elif sel != "(none)":
     idx = int(sel.split(".")[0]) - 1
     active_bytes = st.session_state.runs[idx]["bytes"]
 
