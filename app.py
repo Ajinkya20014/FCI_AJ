@@ -421,15 +421,22 @@ with tab7:
     st.subheader("Download FPS Report")
     st.download_button("Excel", to_excel(report), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    pdf_buf = BytesIO()
-    with PdfPages(pdf_buf) as pdf:
-        fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
-        ax.axis('off')
-        tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
-        pdf.savefig(fig, bbox_inches='tight')
-    st.download_button("PDF", pdf_buf.getvalue(), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf", mime="application/pdf")
+
+    # ✅ Only build the PDF if there are rows to avoid IndexError from empty table
+    if isinstance(report, pd.DataFrame) and not report.empty:
+        pdf_buf = BytesIO()
+        with PdfPages(pdf_buf) as pdf:
+            fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
+            ax.axis('off')
+            tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(10)
+            pdf.savefig(fig, bbox_inches='tight')
+        st.download_button("PDF", pdf_buf.getvalue(),
+                           f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf",
+                           mime="application/pdf")
+    else:
+        st.info("No rows in the selected window to export as PDF.")
 
 # ————————————————————————————————
 # 13. Metrics
