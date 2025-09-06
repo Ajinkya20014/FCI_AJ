@@ -104,16 +104,23 @@ def load_from_bytes(xls_bytes: bytes):
     for tag, need in REQUIRED_COLS.items():
         _need_cols(dfs[tag], need, tag)
 
-    # types
-    for c in ("Day","Vehicle_ID","LG_ID","Quantity_tons"):
+    # ———— FIX 1: keep Vehicle_ID as string; numeric-coerce only numeric fields ————
+    for c in ("Day", "LG_ID", "Quantity_tons"):
         if c in dispatch_cg.columns:
             dispatch_cg[c] = pd.to_numeric(dispatch_cg[c], errors="coerce")
-    for c in ("Day","Vehicle_ID","LG_ID","FPS_ID","Quantity_tons"):
+    if "Vehicle_ID" in dispatch_cg.columns:
+        dispatch_cg["Vehicle_ID"] = dispatch_cg["Vehicle_ID"].astype(str).str.strip()
+
+    for c in ("Day", "LG_ID", "FPS_ID", "Quantity_tons"):
         if c in dispatch_lg.columns:
             dispatch_lg[c] = pd.to_numeric(dispatch_lg[c], errors="coerce")
-    for c in ("Day","Entity_ID","Stock_Level_tons"):
+    if "Vehicle_ID" in dispatch_lg.columns:
+        dispatch_lg["Vehicle_ID"] = dispatch_lg["Vehicle_ID"].astype(str).str.strip()
+
+    for c in ("Day", "Entity_ID", "Stock_Level_tons"):
         if c in stock_levels.columns:
             stock_levels[c] = pd.to_numeric(stock_levels[c], errors="coerce")
+    # ———— END FIX 1 ————
 
     # settings params
     DAYS       = _get_setting(settings, "Distribution_Days", 30, int)
@@ -198,7 +205,7 @@ with st.sidebar:
 active_bytes = None
 if upl is not None and not pub:
     active_bytes = upl.read()
-elif sel != "(none)":
+elif sel != "(none)"):
     idx = int(sel.split(".")[0]) - 1
     active_bytes = st.session_state.runs[idx]["bytes"]
 
@@ -305,7 +312,7 @@ with tab2:
     st.plotly_chart(fig2, use_container_width=True)
 
 # ————————————————————————————————
-# 8. FPS Report  ———— CHANGED (Trips_Count & Vehicle_IDs fix) ————
+# 8. FPS Report  ———— FIX 2 here ————
 # ————————————————————————————————
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
@@ -314,24 +321,37 @@ with tab3:
     if fps_df.empty:
         report = pd.DataFrame(columns=["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"])
     else:
-        # Treat Vehicle_IDs as strings (e.g., 'GA10T0587') and count rows as trips
+        # Total tons per FPS
         report = (
-            fps_df.groupby("FPS_ID")
-            .agg(
-                Total_Dispatched_tons=("Quantity_tons", "sum"),
-                Trips_Count=("Vehicle_ID", "count"),
-                Vehicle_IDs=("Vehicle_ID", lambda s: ", ".join(sorted(pd.unique(s.astype(str)))))
-            )
-            .reset_index()
+            fps_df.groupby("FPS_ID", as_index=False)["Quantity_tons"]
+                  .sum()
+                  .rename(columns={"Quantity_tons": "Total_Dispatched_tons"})
         )
 
-        # Attach FPS name if present
+        # Trips per FPS = number of rows (robust even if Vehicle_ID has NA)
+        trips = fps_df.groupby("FPS_ID").size().reset_index(name="Trips_Count")
+
+        # Vehicle IDs per FPS = unique string IDs, drop NA, sorted
+        veh_ids = (
+            fps_df.dropna(subset=["Vehicle_ID"])
+                  .assign(Vehicle_ID=fps_df["Vehicle_ID"].astype(str).str.strip())
+                  .groupby("FPS_ID")["Vehicle_ID"]
+                  .apply(lambda s: ", ".join(sorted(pd.unique(s))))
+                  .reset_index(name="Vehicle_IDs")
+        )
+
+        # Merge parts + FPS name
+        report = (report
+                  .merge(trips, on="FPS_ID", how="left")
+                  .merge(veh_ids, on="FPS_ID", how="left"))
+
         if "FPS_Name" in fps.columns:
             report = report.merge(fps[["FPS_ID", "FPS_Name"]], on="FPS_ID", how="left")
         else:
             report["FPS_Name"] = ""
 
-        # Order & tidy
+        report["Trips_Count"] = report["Trips_Count"].fillna(0).astype(int)
+        report["Vehicle_IDs"] = report["Vehicle_IDs"].fillna("")
         report = report[["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"]]
         report = report.sort_values("Total_Dispatched_tons", ascending=False)
 
