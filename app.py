@@ -305,45 +305,35 @@ with tab2:
     st.plotly_chart(fig2, use_container_width=True)
 
 # ————————————————————————————————
-# 8. FPS Report
+# 8. FPS Report  ———— CHANGED (Trips_Count & Vehicle_IDs fix) ————
 # ————————————————————————————————
 with tab3:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
 
-    # 🔧 Robust Vehicle_ID normalization: extract digits and use as integer IDs
-    if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
-        # keep original column; add a normalized one for aggregation
-        fps_df = fps_df.copy()
-        # Extract first run of digits from whatever is in Vehicle_ID (e.g., "veh-3" -> 3, "4.0" -> 4)
-        fps_df["Vehicle_ID_norm"] = (
-            fps_df["Vehicle_ID"]
-            .astype(str)
-            .str.extract(r"(\d+)", expand=False)
-            .astype("Int64")
+    if fps_df.empty:
+        report = pd.DataFrame(columns=["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"])
+    else:
+        # Treat Vehicle_IDs as strings (e.g., 'GA10T0587') and count rows as trips
+        report = (
+            fps_df.groupby("FPS_ID")
+            .agg(
+                Total_Dispatched_tons=("Quantity_tons", "sum"),
+                Trips_Count=("Vehicle_ID", "count"),
+                Vehicle_IDs=("Vehicle_ID", lambda s: ", ".join(sorted(pd.unique(s.astype(str)))))
+            )
+            .reset_index()
         )
 
-    report = (
-        fps_df.groupby("FPS_ID")
-        .agg(
-            Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-            # count trips using normalized (non-null) IDs; if none, fall back to row count via size()
-            Trips_Count=pd.NamedAgg("Vehicle_ID_norm","count")
-            if "Vehicle_ID_norm" in fps_df.columns else pd.NamedAgg("Vehicle_ID","count"),
-            Vehicle_IDs=pd.NamedAgg(
-                "Vehicle_ID_norm" if "Vehicle_ID_norm" in fps_df.columns else "Vehicle_ID",
-                lambda s: ",".join(map(str,
-                                       sorted(pd.to_numeric(s, errors="coerce")
-                                              .dropna()
-                                              .astype(int)
-                                              .unique())))
-            )
-        )
-        .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name"]] if "FPS_Name" in fps.columns else fps[["FPS_ID"]],
-               on="FPS_ID", how="left")
-        .sort_values("Total_Dispatched_tons", ascending=False)
-    ) if not fps_df.empty else pd.DataFrame(columns=["FPS_ID","Total_Dispatched_tons","Trips_Count","Vehicle_IDs","FPS_Name"])
+        # Attach FPS name if present
+        if "FPS_Name" in fps.columns:
+            report = report.merge(fps[["FPS_ID", "FPS_Name"]], on="FPS_ID", how="left")
+        else:
+            report["FPS_Name"] = ""
+
+        # Order & tidy
+        report = report[["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"]]
+        report = report.sort_values("Total_Dispatched_tons", ascending=False)
 
     st.dataframe(report, use_container_width=True)
 
@@ -421,6 +411,10 @@ with tab7:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
+    # utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
+    max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
+    pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
+
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
     else:
@@ -446,6 +440,7 @@ with tab7:
         ("Avg Daily CG→LG (t/d)", f"{avg_daily_cg:,.1f}"),
         ("Avg Daily LG→FPS (t/d)",f"{avg_daily_lg:,.1f}"),
         ("Avg Trips/Day",         f"{avg_trips:.1f}"),
+        ("% Fleet Utilization",   f"{pct_fleet:.1f}%"),
         ("LG Stock on Hand (t)",  f"{lg_onhand:,.1f}"),
         ("FPS Stock on Hand (t)", f"{fps_onhand:,.1f}"),
         ("% LG Cap Filled",       f"{pct_lg_filled:.1f}%"),
