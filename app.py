@@ -421,10 +421,6 @@ with tab7:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
-    # utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
-    max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
-    pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
-
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
     else:
@@ -450,7 +446,6 @@ with tab7:
         ("Avg Daily CG→LG (t/d)", f"{avg_daily_cg:,.1f}"),
         ("Avg Daily LG→FPS (t/d)",f"{avg_daily_lg:,.1f}"),
         ("Avg Trips/Day",         f"{avg_trips:.1f}"),
-        ("% Fleet Utilization",   f"{pct_fleet:.1f}%"),
         ("LG Stock on Hand (t)",  f"{lg_onhand:,.1f}"),
         ("FPS Stock on Hand (t)", f"{fps_onhand:,.1f}"),
         ("% LG Cap Filled",       f"{pct_lg_filled:.1f}%"),
