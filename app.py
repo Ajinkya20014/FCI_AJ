@@ -284,11 +284,12 @@ with st.sidebar:
     st.metric("Vehicles Available", VEH_TOTAL)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
 
-# Create tabs (your originals)
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+# Create tabs (added a new "CG→LG Report" tab)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "CG→LG Overview", "LG→FPS Overview",
-    "FPS Report", "FPS At-Risk",
-    "FPS Data", "Downloads", "Metrics"
+    "CG→LG Report", "FPS Report",
+    "FPS At-Risk", "FPS Data",
+    "Downloads", "Metrics"
 ])
 
 # ————————————————————————————————
@@ -312,9 +313,38 @@ with tab2:
     st.plotly_chart(fig2, use_container_width=True)
 
 # ————————————————————————————————
-# 8. FPS Report  ———— FIX 2 here ————
+# 8. CG→LG Report (NEW)
+
 # ————————————————————————————————
 with tab3:
+    st.subheader("CG → LG Dispatch Details")
+    cg_df = dispatch_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_cg.empty else pd.DataFrame(columns=dispatch_cg.columns)
+
+    # Aggregate by LG & Day; include trip count and LG Name
+    if not cg_df.empty:
+        cg_report = (
+            cg_df.groupby(["LG_ID", "Day"], as_index=False)
+                 .agg(Total_Dispatched_tons=("Quantity_tons", "sum"),
+                      Trips_Count=("Vehicle_ID", "count"))
+                 .merge(lgs[["LG_ID", "LG_Name"]], on="LG_ID", how="left")
+                 .sort_values(["Day", "LG_Name", "LG_ID"])
+        )
+    else:
+        cg_report = pd.DataFrame(columns=["LG_ID","Day","Total_Dispatched_tons","Trips_Count","LG_Name"])
+
+    st.dataframe(cg_report, use_container_width=True)
+
+    st.download_button(
+        "Download CG→LG Report (Excel)",
+        to_excel(cg_report),
+        f"CG_to_LG_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+# ————————————————————————————————
+# 9. FPS Report
+# ————————————————————————————————
+with tab4:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
 
@@ -358,9 +388,9 @@ with tab3:
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————
-# 9. FPS At-Risk
+# 10. FPS At-Risk
 # ————————————————————————————————
-with tab4:
+with tab5:
     st.subheader("FPS At-Risk List")
     if not fps_stock.empty:
         arf = fps_stock.query("Day>=@day_range[0] & Day<=@day_range[1] & At_Risk")[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
@@ -371,9 +401,9 @@ with tab4:
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 10. FPS Data
+# 11. FPS Data
 # ————————————————————————————————
-with tab5:
+with tab6:
     st.subheader("FPS Stock & Upcoming Receipts")
     end_day = min(day_range[1], int(stock_levels["Day"].max() if not stock_levels.empty else day_range[1]))
     fps_data = []
@@ -396,26 +426,33 @@ with tab5:
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 11. Downloads
+# 12. Downloads
 # ————————————————————————————————
-with tab6:
+with tab7:
     st.subheader("Download FPS Report")
     st.download_button("Excel", to_excel(report), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    pdf_buf = BytesIO()
-    with PdfPages(pdf_buf) as pdf:
-        fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
-        ax.axis('off')
-        tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
-        pdf.savefig(fig, bbox_inches='tight')
-    st.download_button("PDF", pdf_buf.getvalue(), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf", mime="application/pdf")
+
+    # ✅ Only build the PDF if there are rows to avoid IndexError from empty table
+    if isinstance(report, pd.DataFrame) and not report.empty:
+        pdf_buf = BytesIO()
+        with PdfPages(pdf_buf) as pdf:
+            fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
+            ax.axis('off')
+            tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(10)
+            pdf.savefig(fig, bbox_inches='tight')
+        st.download_button("PDF", pdf_buf.getvalue(),
+                           f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf",
+                           mime="application/pdf")
+    else:
+        st.info("No rows in the selected window to export as PDF.")
 
 # ————————————————————————————————
-# 12. Metrics
+# 13. Metrics
 # ————————————————————————————————
-with tab7:
+with tab8:
     st.subheader("Key Performance Indicators")
     end_day = min(day_range[1], int(stock_levels["Day"].max() if not stock_levels.empty else day_range[1]))
 
