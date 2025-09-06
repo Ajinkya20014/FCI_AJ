@@ -440,19 +440,41 @@ with tab7:
     remaining_t  = total_plan - dispatched_cum
     days_rem     = math.ceil(remaining_t/DAILY_CAP) if DAILY_CAP else None
 
+    def c(v):
+        try:
+            return int(math.ceil(float(v)))
+        except Exception:
+            return 0
+
+    c_cg_sel        = c(cg_sel)
+    c_lg_sel        = c(lg_sel)
+    c_avg_daily_cg  = c(avg_daily_cg)
+    c_avg_daily_lg  = c(avg_daily_lg)
+    c_avg_trips     = c(avg_trips)
+    c_pct_fleet     = c(pct_fleet)
+    c_lg_onhand     = c(lg_onhand)
+    c_fps_onhand    = c(fps_onhand)
+    c_pct_lg_filled = c(pct_lg_filled)
+    c_pct_plan      = c(pct_plan)
+    c_fps_zero      = c(fps_zero)
+    c_fps_risk      = c(fps_risk)
+    c_days_rem      = (None if days_rem is None else c(days_rem))
+    # ---------------------------------------------
+
     metrics = [
-        ("Total CG→LG (t)",       f"{cg_sel:,.1f}"),
-        ("Total LG→FPS (t)",      f"{lg_sel:,.1f}"),
-        ("Avg Daily CG→LG (t/d)", f"{avg_daily_cg:,.1f}"),
-        ("Avg Daily LG→FPS (t/d)",f"{avg_daily_lg:,.1f}"),
-        ("Avg Trips/Day",         f"{avg_trips:.1f}"),
-        ("LG Stock on Hand (t)",  f"{lg_onhand:,.1f}"),
-        ("FPS Stock on Hand (t)", f"{fps_onhand:,.1f}"),
-        ("% LG Cap Filled",       f"{pct_lg_filled:.1f}%"),
-        ("FPS Stock-Outs",        f"{fps_zero}"),
-        ("FPS At-Risk Count",     f"{fps_risk}"),
-        ("% Plan Completed",      f"{pct_plan:.1f}%"),
-        ("Days Remaining",        f"{days_rem if days_rem is not None else '—'}")
+        ("Total CG→LG (t)",       f"{c_cg_sel:,d}"),
+        ("Total LG→FPS (t)",      f"{c_lg_sel:,d}"),
+        ("Avg Daily CG→LG (t/d)", f"{c_avg_daily_cg:,d}"),
+        ("Avg Daily LG→FPS (t/d)",f"{c_avg_daily_lg:,d}"),
+        ("Avg Trips/Day",         f"{c_avg_trips:,d}"),
+        ("% Fleet Utilization",   f"{c_pct_fleet}%"),
+        ("LG Stock on Hand (t)",  f"{c_lg_onhand:,d}"),
+        ("FPS Stock on Hand (t)", f"{c_fps_onhand:,d}"),
+        ("% LG Cap Filled",       f"{c_pct_lg_filled}%"),
+        ("FPS Stock-Outs",        f"{c_fps_zero}"),
+        ("FPS At-Risk Count",     f"{c_fps_risk}"),
+        ("% Plan Completed",      f"{c_pct_plan}%"),
+        ("Days Remaining",        f"{c_days_rem if c_days_rem is not None else '—'}")
     ]
     cols = st.columns(3)
     for i, (label, val) in enumerate(metrics):
