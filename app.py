@@ -266,6 +266,9 @@ with st.sidebar:
         if cols[i % 4].checkbox(label, value=True, key=f"lg_{lg_id}"):
             selected_lgs.append(lg_id)
 
+    # 👇 normalize selected_lgs once for reuse in tabs
+    selected_lg_ids = pd.to_numeric(pd.Series(selected_lgs), errors="coerce").dropna().astype(int).tolist()
+
     st.markdown("---")
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_cg.empty else 0.0
@@ -290,7 +293,10 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # ————————————————————————————————
 with tab1:
     st.subheader("CG → LG Dispatch")
-    df1 = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not day_totals_cg.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
+    base = dispatch_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_cg.empty else pd.DataFrame(columns=dispatch_cg.columns)
+    if not base.empty and selected_lg_ids:
+        base = base[base["LG_ID"].isin(selected_lg_ids)]
+    df1 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig1 = px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig1.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
     st.plotly_chart(fig1, use_container_width=True)
@@ -300,7 +306,10 @@ with tab1:
 # ————————————————————————————————
 with tab2:
     st.subheader("LG → FPS Dispatch")
-    df2 = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not day_totals_lg.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
+    base = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+    if not base.empty and selected_lg_ids:
+        base = base[base["LG_ID"].isin(selected_lg_ids)]
+    df2 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig2 = px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig2.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
     st.plotly_chart(fig2, use_container_width=True)
@@ -311,6 +320,8 @@ with tab2:
 with tab3:
     st.subheader("CG → LG Dispatch Details")
     cg_df = dispatch_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_cg.empty else pd.DataFrame(columns=dispatch_cg.columns)
+    if not cg_df.empty and selected_lg_ids:
+        cg_df = cg_df[cg_df["LG_ID"].isin(selected_lg_ids)]
 
     # Aggregate by LG & Day; include trip count and LG Name
     if not cg_df.empty:
@@ -339,6 +350,8 @@ with tab3:
 with tab4:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+    if not fps_df.empty and selected_lg_ids:
+        fps_df = fps_df[fps_df["LG_ID"].isin(selected_lg_ids)]
 
     # 🔧 Robust Vehicle_ID normalization: extract digits and use as integer IDs
     if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
