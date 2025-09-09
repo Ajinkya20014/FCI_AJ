@@ -306,7 +306,7 @@ with tab1:
     df1 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig1 = px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig1.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, use_container_width=True, key="cg_lg_overview")
 
 # ————————————————————————————————
 # 7. LG→FPS Overview
@@ -319,7 +319,7 @@ with tab2:
     df2 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig2 = px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig2.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, key="lg_fps_overview")
 
 # ————————————————————————————————
 # 8. CG→LG Report (NEW)
@@ -492,7 +492,7 @@ with tab8:
 
     fps_onhand   = fps_stock.query("Day==@end_day")["Stock_Level_tons"].sum() if not fps_stock.empty else 0.0
     if "Storage_Capacity_tons" in lgs.columns:
-        lg_caps = lgs[lgs["LG_ID"].isin(selected_lgs)]["Storage_Capacity_tons"].sum()
+        lg_caps = lgs[lgs["LG_ID"].isin(selected_lg_ids)]["Storage_Capacity_tons"].sum()
     else:
         lg_caps = 0.0
     pct_lg_filled= (lg_onhand/lg_caps)*100 if lg_caps else 0.0
