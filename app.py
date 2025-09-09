@@ -481,9 +481,9 @@ with tab8:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
-    # utilization = avg trips/day ÷ (vehicles * trips/vehicle/day)
-    max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
-    pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
+    # ——— removed fleet utilization calc ———
+    # max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
+    # pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
 
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
@@ -515,7 +515,7 @@ with tab8:
     c_avg_daily_cg  = c(avg_daily_cg)
     c_avg_daily_lg  = c(avg_daily_lg)
     c_avg_trips     = c(avg_trips)
-    c_pct_fleet     = c(pct_fleet)
+    # c_pct_fleet   = c(pct_fleet)   # ← removed
     c_lg_onhand     = c(lg_onhand)
     c_fps_onhand    = c(fps_onhand)
     c_pct_lg_filled = c(pct_lg_filled)
@@ -523,7 +523,6 @@ with tab8:
     c_fps_zero      = c(fps_zero)
     c_fps_risk      = c(fps_risk)
     c_days_rem      = (None if days_rem is None else c(days_rem))
-    # ---------------------------------------------
 
     metrics = [
         ("Total CG→LG (t)",       f"{c_cg_sel:,d}"),
@@ -531,7 +530,7 @@ with tab8:
         ("Avg Daily CG→LG (t/d)", f"{c_avg_daily_cg:,d}"),
         ("Avg Daily LG→FPS (t/d)",f"{c_avg_daily_lg:,d}"),
         ("Avg Trips/Day",         f"{c_avg_trips:,d}"),
-        ("% Fleet Utilization",   f"{c_pct_fleet}%"),
+        # ("% Fleet Utilization", f"{c_pct_fleet}%"),  # ← removed
         ("LG Stock on Hand (t)",  f"{c_lg_onhand:,d}"),
         ("FPS Stock on Hand (t)", f"{c_fps_onhand:,d}"),
         ("% LG Cap Filled",       f"{c_pct_lg_filled}%"),
