@@ -104,14 +104,15 @@ def load_from_bytes(xls_bytes: bytes):
     for tag, need in REQUIRED_COLS.items():
         _need_cols(dfs[tag], need, tag)
 
-    # ———— FIX 1: keep Vehicle_ID as string; numeric-coerce only numeric fields ————
+    # ———— keep Vehicle_ID as string; numeric-coerce only numeric fields ————
     for c in ("Day", "LG_ID", "Quantity_tons"):
         if c in dispatch_cg.columns:
             dispatch_cg[c] = pd.to_numeric(dispatch_cg[c], errors="coerce")
     if "Vehicle_ID" in dispatch_cg.columns:
         dispatch_cg["Vehicle_ID"] = dispatch_cg["Vehicle_ID"].astype(str).str.strip()
 
-    for c in ("Day", "LG_ID", "FPS_ID", "Quantity_tons"):
+    # NOTE: include AAY/PHH dispatched columns if present
+    for c in ("Day", "LG_ID", "FPS_ID", "Quantity_tons", "AAY_Dispatched_tons", "PHH_Dispatched_tons"):
         if c in dispatch_lg.columns:
             dispatch_lg[c] = pd.to_numeric(dispatch_lg[c], errors="coerce")
     if "Vehicle_ID" in dispatch_lg.columns:
@@ -120,7 +121,7 @@ def load_from_bytes(xls_bytes: bytes):
     for c in ("Day", "Entity_ID", "Stock_Level_tons"):
         if c in stock_levels.columns:
             stock_levels[c] = pd.to_numeric(stock_levels[c], errors="coerce")
-    # ———— END FIX 1 ————
+    # ———— END coercions ————
 
     # settings params
     DAYS       = _get_setting(settings, "Distribution_Days", 30, int)
@@ -138,20 +139,6 @@ def load_from_bytes(xls_bytes: bytes):
     fps["Daily_Demand_tons"] = pd.to_numeric(fps["Monthly_Demand_tons"], errors="coerce")/30.0
     if "Reorder_Threshold_tons" not in fps.columns:
         fps["Reorder_Threshold_tons"] = fps["Daily_Demand_tons"] * fps["Lead_Time_days"]
-
-    # —— NEW: compute AAY/PHH monthly allocation (tons) from FPS sheet ——
-    AAY_per_card_kg        = _get_setting(settings, "AAY_per_card_kg",        35.0, float)
-    PHH_per_beneficiary_kg = _get_setting(settings, "PHH_per_beneficiary_kg", 5.0,  float)
-
-    aay_cards = pd.to_numeric(fps.get("No. of AAY Cards", 0), errors="coerce").fillna(0)
-    phh_bens  = pd.to_numeric(fps.get("No. of PHH Benificiaries", 0), errors="coerce").fillna(0)
-
-    fps["AAY_Monthly_tons"] = (aay_cards * AAY_per_card_kg) / 1000.0
-    fps["PHH_Monthly_tons"] = (phh_bens  * PHH_per_beneficiary_kg) / 1000.0
-
-    aay_total_tons = float(fps["AAY_Monthly_tons"].sum()) if "AAY_Monthly_tons" in fps.columns else 0.0
-    phh_total_tons = float(fps["PHH_Monthly_tons"].sum()) if "PHH_Monthly_tons" in fps.columns else 0.0
-    # —— END NEW ——
 
     # aggregates (align with your original code)
     day_totals_cg = (dispatch_cg.groupby("Day", as_index=False)["Quantity_tons"].sum()
@@ -183,9 +170,6 @@ def load_from_bytes(xls_bytes: bytes):
         "stock_levels": stock_levels, "lg_stock": lg_stock, "fps_stock": fps_stock,
         "day_totals_cg": day_totals_cg, "day_totals_lg": day_totals_lg,
         "veh_usage": veh_usage,
-        # NEW: expose AAY/PHH totals (tons) computed from FPS
-        "aay_total_tons": aay_total_tons,
-        "phh_total_tons": phh_total_tons,
         "params": dict(DAYS=DAYS, TRUCK_CAP=TRUCK_CAP, VEH_TOTAL=VEH_TOTAL, MAX_TRIPS=MAX_TRIPS)
     }
 
@@ -256,9 +240,6 @@ DAYS         = D["params"]["DAYS"]
 TRUCK_CAP    = D["params"]["TRUCK_CAP"]
 MAX_TRIPS    = D["params"]["MAX_TRIPS"]  # per-vehicle/day
 VEH_TOTAL    = D["params"]["VEH_TOTAL"]
-# NEW totals (from FPS)
-AAY_TOTAL_T  = D["aay_total_tons"]
-PHH_TOTAL_T  = D["phh_total_tons"]
 
 # ✅ TOTAL daily capacity (trips * vehicles * tons)
 DAILY_CAP = VEH_TOTAL * MAX_TRIPS * TRUCK_CAP
@@ -299,13 +280,21 @@ with st.sidebar:
     st.markdown("---")
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_cg.empty else 0.0
-    lg_sel = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_lg.empty else 0.0
+
+    # dispatch (LG→FPS) in window (+ optional LG filter)
+    base_dlg = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+    if not base_dlg.empty and selected_lg_ids:
+        base_dlg = base_dlg[base_dlg["LG_ID"].isin(selected_lg_ids)]
+
+    lg_sel  = base_dlg["Quantity_tons"].sum() if not base_dlg.empty else 0.0
+    aay_sel = base_dlg["AAY_Dispatched_tons"].sum() if ("AAY_Dispatched_tons" in base_dlg.columns and not base_dlg.empty) else 0.0
+    phh_sel = base_dlg["PHH_Dispatched_tons"].sum() if ("PHH_Dispatched_tons" in base_dlg.columns and not base_dlg.empty) else 0.0
 
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
-    # NEW: plan/entitlement totals from FPS sheet
-    st.metric("AAY Allocation (t)", f"{AAY_TOTAL_T:,.1f}")
-    st.metric("PHH Allocation (t)", f"{PHH_TOTAL_T:,.1f}")
+    # NEW: show how much of dispatched grain was AAY vs PHH in the selected window
+    st.metric("AAY Dispatched (t)", f"{aay_sel:,.1f}")
+    st.metric("PHH Dispatched (t)", f"{phh_sel:,.1f}")
 
     # show capacity figures that match the utilization math
     st.metric("Max Trips/Day", VEH_TOTAL * MAX_TRIPS)
