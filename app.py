@@ -139,6 +139,20 @@ def load_from_bytes(xls_bytes: bytes):
     if "Reorder_Threshold_tons" not in fps.columns:
         fps["Reorder_Threshold_tons"] = fps["Daily_Demand_tons"] * fps["Lead_Time_days"]
 
+    # —— NEW: compute AAY/PHH monthly allocation (tons) from FPS sheet ——
+    AAY_per_card_kg        = _get_setting(settings, "AAY_per_card_kg",        35.0, float)
+    PHH_per_beneficiary_kg = _get_setting(settings, "PHH_per_beneficiary_kg", 5.0,  float)
+
+    aay_cards = pd.to_numeric(fps.get("No. of AAY Cards", 0), errors="coerce").fillna(0)
+    phh_bens  = pd.to_numeric(fps.get("No. of PHH Benificiaries", 0), errors="coerce").fillna(0)
+
+    fps["AAY_Monthly_tons"] = (aay_cards * AAY_per_card_kg) / 1000.0
+    fps["PHH_Monthly_tons"] = (phh_bens  * PHH_per_beneficiary_kg) / 1000.0
+
+    aay_total_tons = float(fps["AAY_Monthly_tons"].sum()) if "AAY_Monthly_tons" in fps.columns else 0.0
+    phh_total_tons = float(fps["PHH_Monthly_tons"].sum()) if "PHH_Monthly_tons" in fps.columns else 0.0
+    # —— END NEW ——
+
     # aggregates (align with your original code)
     day_totals_cg = (dispatch_cg.groupby("Day", as_index=False)["Quantity_tons"].sum()
                      if not dispatch_cg.empty else pd.DataFrame(columns=["Day","Quantity_tons"]))
@@ -169,6 +183,9 @@ def load_from_bytes(xls_bytes: bytes):
         "stock_levels": stock_levels, "lg_stock": lg_stock, "fps_stock": fps_stock,
         "day_totals_cg": day_totals_cg, "day_totals_lg": day_totals_lg,
         "veh_usage": veh_usage,
+        # NEW: expose AAY/PHH totals (tons) computed from FPS
+        "aay_total_tons": aay_total_tons,
+        "phh_total_tons": phh_total_tons,
         "params": dict(DAYS=DAYS, TRUCK_CAP=TRUCK_CAP, VEH_TOTAL=VEH_TOTAL, MAX_TRIPS=MAX_TRIPS)
     }
 
@@ -239,6 +256,9 @@ DAYS         = D["params"]["DAYS"]
 TRUCK_CAP    = D["params"]["TRUCK_CAP"]
 MAX_TRIPS    = D["params"]["MAX_TRIPS"]  # per-vehicle/day
 VEH_TOTAL    = D["params"]["VEH_TOTAL"]
+# NEW totals (from FPS)
+AAY_TOTAL_T  = D["aay_total_tons"]
+PHH_TOTAL_T  = D["phh_total_tons"]
 
 # ✅ TOTAL daily capacity (trips * vehicles * tons)
 DAILY_CAP = VEH_TOTAL * MAX_TRIPS * TRUCK_CAP
@@ -280,8 +300,13 @@ with st.sidebar:
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_cg.empty else 0.0
     lg_sel = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_lg.empty else 0.0
+
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
+    # NEW: plan/entitlement totals from FPS sheet
+    st.metric("AAY Allocation (t)", f"{AAY_TOTAL_T:,.1f}")
+    st.metric("PHH Allocation (t)", f"{PHH_TOTAL_T:,.1f}")
+
     # show capacity figures that match the utilization math
     st.metric("Max Trips/Day", VEH_TOTAL * MAX_TRIPS)
     st.metric("Vehicles Available", VEH_TOTAL)
@@ -323,7 +348,6 @@ with tab2:
 
 # ————————————————————————————————
 # 8. CG→LG Report (NEW)
-
 # ————————————————————————————————
 with tab3:
     st.subheader("CG → LG Dispatch Details")
@@ -481,10 +505,6 @@ with tab8:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
-    # ——— removed fleet utilization calc ———
-    # max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
-    # pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
-
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
     else:
@@ -515,7 +535,6 @@ with tab8:
     c_avg_daily_cg  = c(avg_daily_cg)
     c_avg_daily_lg  = c(avg_daily_lg)
     c_avg_trips     = c(avg_trips)
-    # c_pct_fleet   = c(pct_fleet)   # ← removed
     c_lg_onhand     = c(lg_onhand)
     c_fps_onhand    = c(fps_onhand)
     c_pct_lg_filled = c(pct_lg_filled)
@@ -530,7 +549,6 @@ with tab8:
         ("Avg Daily CG→LG (t/d)", f"{c_avg_daily_cg:,d}"),
         ("Avg Daily LG→FPS (t/d)",f"{c_avg_daily_lg:,d}"),
         ("Avg Trips/Day",         f"{c_avg_trips:,d}"),
-        # ("% Fleet Utilization", f"{c_pct_fleet}%"),  # ← removed
         ("LG Stock on Hand (t)",  f"{c_lg_onhand:,d}"),
         ("FPS Stock on Hand (t)", f"{c_fps_onhand:,d}"),
         ("% LG Cap Filled",       f"{c_pct_lg_filled}%"),
