@@ -104,16 +104,23 @@ def load_from_bytes(xls_bytes: bytes):
     for tag, need in REQUIRED_COLS.items():
         _need_cols(dfs[tag], need, tag)
 
-    # types
-    for c in ("Day","Vehicle_ID","LG_ID","Quantity_tons"):
+    # ———— FIX 1: keep Vehicle_ID as string; numeric-coerce only numeric fields ————
+    for c in ("Day", "LG_ID", "Quantity_tons"):
         if c in dispatch_cg.columns:
             dispatch_cg[c] = pd.to_numeric(dispatch_cg[c], errors="coerce")
-    for c in ("Day","Vehicle_ID","LG_ID","FPS_ID","Quantity_tons"):
+    if "Vehicle_ID" in dispatch_cg.columns:
+        dispatch_cg["Vehicle_ID"] = dispatch_cg["Vehicle_ID"].astype(str).str.strip()
+
+    for c in ("Day", "LG_ID", "FPS_ID", "Quantity_tons"):
         if c in dispatch_lg.columns:
             dispatch_lg[c] = pd.to_numeric(dispatch_lg[c], errors="coerce")
-    for c in ("Day","Entity_ID","Stock_Level_tons"):
+    if "Vehicle_ID" in dispatch_lg.columns:
+        dispatch_lg["Vehicle_ID"] = dispatch_lg["Vehicle_ID"].astype(str).str.strip()
+
+    for c in ("Day", "Entity_ID", "Stock_Level_tons"):
         if c in stock_levels.columns:
             stock_levels[c] = pd.to_numeric(stock_levels[c], errors="coerce")
+    # ———— END FIX 1 ————
 
     # settings params
     DAYS       = _get_setting(settings, "Distribution_Days", 30, int)
@@ -266,6 +273,9 @@ with st.sidebar:
         if cols[i % 4].checkbox(label, value=True, key=f"lg_{lg_id}"):
             selected_lgs.append(lg_id)
 
+    # 👇 normalize selected_lgs once for reuse in tabs
+    selected_lg_ids = pd.to_numeric(pd.Series(selected_lgs), errors="coerce").dropna().astype(int).tolist()
+
     st.markdown("---")
     st.header("Quick KPIs")
     cg_sel = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]")["Quantity_tons"].sum() if not day_totals_cg.empty else 0.0
@@ -277,11 +287,12 @@ with st.sidebar:
     st.metric("Vehicles Available", VEH_TOTAL)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
 
-# Create tabs (your originals)
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+# Create tabs (added a new "CG→LG Report" tab)
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
     "CG→LG Overview", "LG→FPS Overview",
-    "FPS Report", "FPS At-Risk",
-    "FPS Data", "Downloads", "Metrics"
+    "CG→LG Report", "FPS Report",
+    "FPS At-Risk", "FPS Data",
+    "Downloads", "Metrics"
 ])
 
 # ————————————————————————————————
@@ -289,68 +300,110 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
 # ————————————————————————————————
 with tab1:
     st.subheader("CG → LG Dispatch")
-    df1 = day_totals_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not day_totals_cg.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
+    base = dispatch_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_cg.empty else pd.DataFrame(columns=dispatch_cg.columns)
+    if not base.empty and selected_lg_ids:
+        base = base[base["LG_ID"].isin(selected_lg_ids)]
+    df1 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig1 = px.bar(df1, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig1.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, use_container_width=True, key="cg_lg_overview")
 
 # ————————————————————————————————
 # 7. LG→FPS Overview
 # ————————————————————————————————
 with tab2:
     st.subheader("LG → FPS Dispatch")
-    df2 = day_totals_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not day_totals_lg.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
+    base = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+    if not base.empty and selected_lg_ids:
+        base = base[base["LG_ID"].isin(selected_lg_ids)]
+    df2 = base.groupby("Day", as_index=False)["Quantity_tons"].sum() if not base.empty else pd.DataFrame(columns=["Day","Quantity_tons"])
     fig2 = px.bar(df2, x="Day", y="Quantity_tons", text="Quantity_tons")
     fig2.update_traces(texttemplate="%{text:.1f}t", textposition="outside")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, key="lg_fps_overview")
 
 # ————————————————————————————————
-# 8. FPS Report
+# 8. CG→LG Report (NEW)
+
 # ————————————————————————————————
 with tab3:
+    st.subheader("CG → LG Dispatch Details")
+    cg_df = dispatch_cg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_cg.empty else pd.DataFrame(columns=dispatch_cg.columns)
+    if not cg_df.empty and selected_lg_ids:
+        cg_df = cg_df[cg_df["LG_ID"].isin(selected_lg_ids)]
+
+    # Aggregate by LG & Day; include trip count and LG Name
+    if not cg_df.empty:
+        cg_report = (
+            cg_df.groupby(["LG_ID", "Day"], as_index=False)
+                 .agg(Total_Dispatched_tons=("Quantity_tons", "sum"),
+                      Trips_Count=("Vehicle_ID", "count"))
+                 .merge(lgs[["LG_ID", "LG_Name"]], on="LG_ID", how="left")
+                 .sort_values(["Day", "LG_Name", "LG_ID"])
+        )
+    else:
+        cg_report = pd.DataFrame(columns=["LG_ID","Day","Total_Dispatched_tons","Trips_Count","LG_Name"])
+
+    st.dataframe(cg_report, use_container_width=True)
+
+    st.download_button(
+        "Download CG→LG Report (Excel)",
+        to_excel(cg_report),
+        f"CG_to_LG_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+# ————————————————————————————————
+# 9. FPS Report
+# ————————————————————————————————
+with tab4:
     st.subheader("FPS-wise Dispatch Details")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
+    if not fps_df.empty and selected_lg_ids:
+        fps_df = fps_df[fps_df["LG_ID"].isin(selected_lg_ids)]
 
-    # 🔧 Robust Vehicle_ID normalization: extract digits and use as integer IDs
-    if not fps_df.empty and "Vehicle_ID" in fps_df.columns:
-        # keep original column; add a normalized one for aggregation
-        fps_df = fps_df.copy()
-        # Extract first run of digits from whatever is in Vehicle_ID (e.g., "veh-3" -> 3, "4.0" -> 4)
-        fps_df["Vehicle_ID_norm"] = (
-            fps_df["Vehicle_ID"]
-            .astype(str)
-            .str.extract(r"(\d+)", expand=False)
-            .astype("Int64")
+    if fps_df.empty:
+        report = pd.DataFrame(columns=["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"])
+    else:
+        # Total tons per FPS
+        report = (
+            fps_df.groupby("FPS_ID", as_index=False)["Quantity_tons"]
+                  .sum()
+                  .rename(columns={"Quantity_tons": "Total_Dispatched_tons"})
         )
 
-    report = (
-        fps_df.groupby("FPS_ID")
-        .agg(
-            Total_Dispatched_tons=pd.NamedAgg("Quantity_tons","sum"),
-            # count trips using normalized (non-null) IDs; if none, fall back to row count via size()
-            Trips_Count=pd.NamedAgg("Vehicle_ID_norm","count")
-            if "Vehicle_ID_norm" in fps_df.columns else pd.NamedAgg("Vehicle_ID","count"),
-            Vehicle_IDs=pd.NamedAgg(
-                "Vehicle_ID_norm" if "Vehicle_ID_norm" in fps_df.columns else "Vehicle_ID",
-                lambda s: ",".join(map(str,
-                                       sorted(pd.to_numeric(s, errors="coerce")
-                                              .dropna()
-                                              .astype(int)
-                                              .unique())))
-            )
+        # Trips per FPS = number of rows (robust even if Vehicle_ID has NA)
+        trips = fps_df.groupby("FPS_ID").size().reset_index(name="Trips_Count")
+
+        # Vehicle IDs per FPS = unique string IDs, drop NA, sorted
+        veh_ids = (
+            fps_df.dropna(subset=["Vehicle_ID"])
+                  .assign(Vehicle_ID=fps_df["Vehicle_ID"].astype(str).str.strip())
+                  .groupby("FPS_ID")["Vehicle_ID"]
+                  .apply(lambda s: ", ".join(sorted(pd.unique(s))))
+                  .reset_index(name="Vehicle_IDs")
         )
-        .reset_index()
-        .merge(fps[["FPS_ID","FPS_Name"]] if "FPS_Name" in fps.columns else fps[["FPS_ID"]],
-               on="FPS_ID", how="left")
-        .sort_values("Total_Dispatched_tons", ascending=False)
-    ) if not fps_df.empty else pd.DataFrame(columns=["FPS_ID","Total_Dispatched_tons","Trips_Count","Vehicle_IDs","FPS_Name"])
+
+        # Merge parts + FPS name
+        report = (report
+                  .merge(trips, on="FPS_ID", how="left")
+                  .merge(veh_ids, on="FPS_ID", how="left"))
+
+        if "FPS_Name" in fps.columns:
+            report = report.merge(fps[["FPS_ID", "FPS_Name"]], on="FPS_ID", how="left")
+        else:
+            report["FPS_Name"] = ""
+
+        report["Trips_Count"] = report["Trips_Count"].fillna(0).astype(int)
+        report["Vehicle_IDs"] = report["Vehicle_IDs"].fillna("")
+        report = report[["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"]]
+        report = report.sort_values("Total_Dispatched_tons", ascending=False)
 
     st.dataframe(report, use_container_width=True)
 
 # ————————————————————————————————
-# 9. FPS At-Risk
+# 10. FPS At-Risk
 # ————————————————————————————————
-with tab4:
+with tab5:
     st.subheader("FPS At-Risk List")
     if not fps_stock.empty:
         arf = fps_stock.query("Day>=@day_range[0] & Day<=@day_range[1] & At_Risk")[["Day","FPS_ID","Stock_Level_tons","Reorder_Threshold_tons"]]
@@ -361,9 +414,9 @@ with tab4:
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 10. FPS Data
+# 11. FPS Data
 # ————————————————————————————————
-with tab5:
+with tab6:
     st.subheader("FPS Stock & Upcoming Receipts")
     end_day = min(day_range[1], int(stock_levels["Day"].max() if not stock_levels.empty else day_range[1]))
     fps_data = []
@@ -386,26 +439,33 @@ with tab5:
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # ————————————————————————————————
-# 11. Downloads
+# 12. Downloads
 # ————————————————————————————————
-with tab6:
+with tab7:
     st.subheader("Download FPS Report")
     st.download_button("Excel", to_excel(report), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    pdf_buf = BytesIO()
-    with PdfPages(pdf_buf) as pdf:
-        fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
-        ax.axis('off')
-        tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
-        tbl.auto_set_font_size(False)
-        tbl.set_fontsize(10)
-        pdf.savefig(fig, bbox_inches='tight')
-    st.download_button("PDF", pdf_buf.getvalue(), f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf", mime="application/pdf")
+
+    # ✅ Only build the PDF if there are rows to avoid IndexError from empty table
+    if isinstance(report, pd.DataFrame) and not report.empty:
+        pdf_buf = BytesIO()
+        with PdfPages(pdf_buf) as pdf:
+            fig, ax = plt.subplots(figsize=(8, max(1, len(report)*0.3) + 1))
+            ax.axis('off')
+            tbl = ax.table(cellText=report.values, colLabels=report.columns, loc='center')
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(10)
+            pdf.savefig(fig, bbox_inches='tight')
+        st.download_button("PDF", pdf_buf.getvalue(),
+                           f"FPS_Report_{day_range[0]}_to_{day_range[1]}.pdf",
+                           mime="application/pdf")
+    else:
+        st.info("No rows in the selected window to export as PDF.")
 
 # ————————————————————————————————
-# 12. Metrics
+# 13. Metrics
 # ————————————————————————————————
-with tab7:
+with tab8:
     st.subheader("Key Performance Indicators")
     end_day = min(day_range[1], int(stock_levels["Day"].max() if not stock_levels.empty else day_range[1]))
 
@@ -421,6 +481,10 @@ with tab7:
         window = D["veh_usage"].query("Day>=@day_range[0] & Day<=@day_range[1]")["Trips_Used"]
         avg_trips = float(window.mean()) if not window.empty else 0.0
 
+    # ——— removed fleet utilization calc ———
+    # max_trips_per_day = VEH_TOTAL * MAX_TRIPS if VEH_TOTAL and MAX_TRIPS else 0
+    # pct_fleet = (avg_trips / max_trips_per_day * 100.0) if max_trips_per_day else 0.0
+
     if not lg_stock.empty and end_day in lg_stock.index and selected_lgs:
         lg_onhand = lg_stock.loc[end_day, [c for c in lg_stock.columns if c in selected_lgs]].sum()
     else:
@@ -428,7 +492,7 @@ with tab7:
 
     fps_onhand   = fps_stock.query("Day==@end_day")["Stock_Level_tons"].sum() if not fps_stock.empty else 0.0
     if "Storage_Capacity_tons" in lgs.columns:
-        lg_caps = lgs[lgs["LG_ID"].isin(selected_lgs)]["Storage_Capacity_tons"].sum()
+        lg_caps = lgs[lgs["LG_ID"].isin(selected_lg_ids)]["Storage_Capacity_tons"].sum()
     else:
         lg_caps = 0.0
     pct_lg_filled= (lg_onhand/lg_caps)*100 if lg_caps else 0.0
@@ -451,7 +515,7 @@ with tab7:
     c_avg_daily_cg  = c(avg_daily_cg)
     c_avg_daily_lg  = c(avg_daily_lg)
     c_avg_trips     = c(avg_trips)
-    c_pct_fleet     = c(pct_fleet)
+    # c_pct_fleet   = c(pct_fleet)   # ← removed
     c_lg_onhand     = c(lg_onhand)
     c_fps_onhand    = c(fps_onhand)
     c_pct_lg_filled = c(pct_lg_filled)
@@ -459,7 +523,6 @@ with tab7:
     c_fps_zero      = c(fps_zero)
     c_fps_risk      = c(fps_risk)
     c_days_rem      = (None if days_rem is None else c(days_rem))
-    # ---------------------------------------------
 
     metrics = [
         ("Total CG→LG (t)",       f"{c_cg_sel:,d}"),
@@ -467,7 +530,7 @@ with tab7:
         ("Avg Daily CG→LG (t/d)", f"{c_avg_daily_cg:,d}"),
         ("Avg Daily LG→FPS (t/d)",f"{c_avg_daily_lg:,d}"),
         ("Avg Trips/Day",         f"{c_avg_trips:,d}"),
-        ("% Fleet Utilization",   f"{c_pct_fleet}%"),
+        # ("% Fleet Utilization", f"{c_pct_fleet}%"),  # ← removed
         ("LG Stock on Hand (t)",  f"{c_lg_onhand:,d}"),
         ("FPS Stock on Hand (t)", f"{c_fps_onhand:,d}"),
         ("% LG Cap Filled",       f"{c_pct_lg_filled}%"),
