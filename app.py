@@ -111,7 +111,7 @@ def load_from_bytes(xls_bytes: bytes):
     if "Vehicle_ID" in dispatch_cg.columns:
         dispatch_cg["Vehicle_ID"] = dispatch_cg["Vehicle_ID"].astype(str).str.strip()
 
-    # NOTE: include AAY/PHH dispatched columns if present
+    # ✅ include AAY/PHH dispatched columns if present
     for c in ("Day", "LG_ID", "FPS_ID", "Quantity_tons", "AAY_Dispatched_tons", "PHH_Dispatched_tons"):
         if c in dispatch_lg.columns:
             dispatch_lg[c] = pd.to_numeric(dispatch_lg[c], errors="coerce")
@@ -287,16 +287,10 @@ with st.sidebar:
         base_dlg = base_dlg[base_dlg["LG_ID"].isin(selected_lg_ids)]
 
     lg_sel  = base_dlg["Quantity_tons"].sum() if not base_dlg.empty else 0.0
-    aay_sel = base_dlg["AAY_Dispatched_tons"].sum() if ("AAY_Dispatched_tons" in base_dlg.columns and not base_dlg.empty) else 0.0
-    phh_sel = base_dlg["PHH_Dispatched_tons"].sum() if ("PHH_Dispatched_tons" in base_dlg.columns and not base_dlg.empty) else 0.0
 
     st.metric("CG→LG Total (t)", f"{cg_sel:,.1f}")
     st.metric("LG→FPS Total (t)", f"{lg_sel:,.1f}")
-    # NEW: show how much of dispatched grain was AAY vs PHH in the selected window
-    st.metric("AAY Dispatched (t)", f"{aay_sel:,.1f}")
-    st.metric("PHH Dispatched (t)", f"{phh_sel:,.1f}")
-
-    # show capacity figures that match the utilization math
+    # capacity context
     st.metric("Max Trips/Day", VEH_TOTAL * MAX_TRIPS)
     st.metric("Vehicles Available", VEH_TOTAL)
     st.metric("Truck Capacity (t)", TRUCK_CAP)
@@ -366,25 +360,38 @@ with tab3:
     )
 
 # ————————————————————————————————
-# 9. FPS Report
+# 9. FPS Report  ✅ now includes AAY/PHH dispatched
 # ————————————————————————————————
 with tab4:
-    st.subheader("FPS-wise Dispatch Details")
+    st.subheader("FPS-wise Dispatch Details (incl. AAY / PHH)")
     fps_df = dispatch_lg.query("Day>=@day_range[0] & Day<=@day_range[1]") if not dispatch_lg.empty else pd.DataFrame(columns=dispatch_lg.columns)
     if not fps_df.empty and selected_lg_ids:
         fps_df = fps_df[fps_df["LG_ID"].isin(selected_lg_ids)]
 
+    # Ensure AAY/PHH columns exist for safe aggregation
+    if "AAY_Dispatched_tons" not in fps_df.columns:
+        fps_df["AAY_Dispatched_tons"] = 0.0
+    if "PHH_Dispatched_tons" not in fps_df.columns:
+        fps_df["PHH_Dispatched_tons"] = 0.0
+
     if fps_df.empty:
-        report = pd.DataFrame(columns=["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"])
+        report = pd.DataFrame(columns=[
+            "FPS_ID","FPS_Name","Total_Dispatched_tons",
+            "AAY_Dispatched_tons","PHH_Dispatched_tons",
+            "Trips_Count","Vehicle_IDs"
+        ])
     else:
-        # Total tons per FPS
-        report = (
-            fps_df.groupby("FPS_ID", as_index=False)["Quantity_tons"]
-                  .sum()
-                  .rename(columns={"Quantity_tons": "Total_Dispatched_tons"})
+        # Core totals per FPS
+        base = (
+            fps_df.groupby("FPS_ID", as_index=False)
+                  .agg(
+                      Total_Dispatched_tons=("Quantity_tons","sum"),
+                      AAY_Dispatched_tons=("AAY_Dispatched_tons","sum"),
+                      PHH_Dispatched_tons=("PHH_Dispatched_tons","sum")
+                  )
         )
 
-        # Trips per FPS = number of rows (robust even if Vehicle_ID has NA)
+        # Trips per FPS = number of rows
         trips = fps_df.groupby("FPS_ID").size().reset_index(name="Trips_Count")
 
         # Vehicle IDs per FPS = unique string IDs, drop NA, sorted
@@ -396,20 +403,22 @@ with tab4:
                   .reset_index(name="Vehicle_IDs")
         )
 
-        # Merge parts + FPS name
-        report = (report
+        report = (base
                   .merge(trips, on="FPS_ID", how="left")
                   .merge(veh_ids, on="FPS_ID", how="left"))
 
         if "FPS_Name" in fps.columns:
-            report = report.merge(fps[["FPS_ID", "FPS_Name"]], on="FPS_ID", how="left")
+            report = report.merge(fps[["FPS_ID","FPS_Name"]], on="FPS_ID", how="left")
         else:
             report["FPS_Name"] = ""
 
         report["Trips_Count"] = report["Trips_Count"].fillna(0).astype(int)
         report["Vehicle_IDs"] = report["Vehicle_IDs"].fillna("")
-        report = report[["FPS_ID", "FPS_Name", "Total_Dispatched_tons", "Trips_Count", "Vehicle_IDs"]]
-        report = report.sort_values("Total_Dispatched_tons", ascending=False)
+        report = report[[
+            "FPS_ID","FPS_Name","Total_Dispatched_tons",
+            "AAY_Dispatched_tons","PHH_Dispatched_tons",
+            "Trips_Count","Vehicle_IDs"
+        ]].sort_values("Total_Dispatched_tons", ascending=False)
 
     st.dataframe(report, use_container_width=True)
 
